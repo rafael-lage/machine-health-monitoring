@@ -1,3 +1,8 @@
+//controlar a leitura de dados para utilizar na logica
+//implementar a comunicacao com a interface grafica
+//implementar as funcoes solicitadas pelo professor
+//expandir para dois sensores
+
 #include <iostream>
 #include <cstdlib>
 #include <chrono>
@@ -11,8 +16,13 @@
 #define GRAPHITE_HOST "graphite"
 #define GRAPHITE_PORT 2003
 
-void post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
+const std::string SERVER_ADDRESS("tcp://localhost:1883");
+const std::string CLIENT_ID("ExampleSubscriber");
+const std::string TOPIC("/sensors/#");
 
+//executa apos receber os dados coletados do broker
+void post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
+    std :: cout << "Mensagem recebida: "<< machine_id << " " << sensor_id << " " << timestamp_str << " " << value << std:: endl;
 }
 
 std::vector<std::string> split(const std::string &str, char delim) {
@@ -24,10 +34,6 @@ std::vector<std::string> split(const std::string &str, char delim) {
     }
     return tokens;
 }
-
-int main(int argc, char* argv[]) {
-    std::string clientId = "clientId";
-    mqtt::async_client client(BROKER_ADDRESS, clientId);
 
     // Create an MQTT callback.
     class callback : public virtual mqtt::callback {
@@ -47,25 +53,26 @@ int main(int argc, char* argv[]) {
         }
     };
 
+int main(int argc, char* argv[]) {
+    mqtt::async_client client(SERVER_ADDRESS, CLIENT_ID);
     callback cb;
     client.set_callback(cb);
 
-    // Connect to the MQTT broker.
+    // Conectando ao broker
     mqtt::connect_options connOpts;
-    connOpts.set_keep_alive_interval(20);
-    connOpts.set_clean_session(true);
+    mqtt::token_ptr conntok = client.connect(connOpts);
+    conntok->wait();
 
-    try {
-        client.connect(connOpts);
-        client.subscribe("/sensors/#", QOS);
-    } catch (mqtt::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return EXIT_FAILURE;
-    }
+    // Assinando ao tópico
+    client.subscribe(TOPIC, 1);
 
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    return EXIT_SUCCESS;
+
+    // Desconectando
+    client.disconnect()->wait();
+
+    return 0;
 }
