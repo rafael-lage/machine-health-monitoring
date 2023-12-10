@@ -1,3 +1,7 @@
+//codigo funcionando para dois sensores diferentes: memoria e temperatura
+//pode-se alterar ele facilmente para adicionar varios sensores utilizando vectors
+
+
 #include <iostream>
 #include <cstdlib>
 #include <chrono>
@@ -18,15 +22,15 @@ std::string machineId;
 std::mutex mtx;
 
 // Protótipo
-void create_main_msg(nlohmann::json& j, std::string data_type, std::string sensor_id, int frequency);
+void create_main_msg(nlohmann::json& j, std::string data_type, std::string sensor_id, int frequency, std::string sensor_id2);
 void create_sensor_msg(nlohmann::json& j, std::string sensor_id, int value);
 void publish_main_topic(nlohmann::json& j, int frequency);
 void publish_sensor_topic(nlohmann::json& j, int frequency);
 
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
+    if (argc < 4) {
         std::cerr << "Erro - Favor informar a frequência do sensor no formato:"
-                  << std::endl << "sensor_monitor <temperature_machine_frequency> <temperature_sensor_frequency>"
+                  << std::endl << "sensor_monitor <machine_frequency> <temperature_sensor_frequency> <memory_sensor_frequency>"
                   << std::endl;
         return EXIT_FAILURE;
     }
@@ -44,6 +48,7 @@ int main(int argc, char* argv[]) {
     // Recebendo a frequência do primeiro sensor.
     int temperature_machine_frequency = atoi(argv[1]);
     int temperature_sensor_frequency = atoi(argv[2]);
+    int memory_sensor_frequency = atoi(argv[3]);
 
     try {
         client.connect(connOpts);
@@ -54,10 +59,10 @@ int main(int argc, char* argv[]) {
     std::clog << "Connected to the broker" << std::endl;
 
     // Iniciar uma thread para a mensagem principal
-    std::thread main_msg_thread([temperature_machine_frequency]() {
+    std::thread main_msg_thread([temperature_machine_frequency, temperature_sensor_frequency, memory_sensor_frequency]() {
         while (true) {
             nlohmann::json main_j;
-            create_main_msg(main_j, "int", "cpu_temperature", temperature_machine_frequency);
+            create_main_msg(main_j, "int", "cpu_temperature", temperature_machine_frequency, "memory_usage");
             publish_main_topic(main_j, temperature_machine_frequency);
 
             // Dormir por algum tempo antes da próxima iteração
@@ -65,7 +70,7 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    // Iniciar uma thread para o sensor
+    // Iniciar uma thread para o sensor de temperatura
     std::thread sensor_thread([temperature_sensor_frequency]() {
         while (true) {
             nlohmann::json sensor_j;
@@ -78,10 +83,27 @@ int main(int argc, char* argv[]) {
         }
     });
 
+    // Iniciar uma thread para o sensor de memoria
+
+    std::thread sensor_thread2([memory_sensor_frequency]() {
+        while (true) {
+            nlohmann::json sensor_j2;
+            int sensor_value = rand() % 101;
+            create_sensor_msg(sensor_j2, "memory_usage", sensor_value);
+            publish_sensor_topic(sensor_j2, memory_sensor_frequency);
+
+            // Dormir por algum tempo antes da próxima iteração
+            std::this_thread::sleep_for(std::chrono::milliseconds(memory_sensor_frequency));
+        }
+    });
+
+    
+
     // Aguardar que as threads terminem (isso nunca deve acontecer neste caso)
     main_msg_thread.join();
     sensor_thread.join();
-
+    sensor_thread2.join();
+    
     // Fechar a conexão MQTT antes de sair.
     try {
         client.disconnect();
@@ -93,11 +115,12 @@ int main(int argc, char* argv[]) {
 }
 
 // Definição da função create_main_msg.
-void create_main_msg(nlohmann::json& j, std::string data_type, std::string sensor_id, int frequency) {
+void create_main_msg(nlohmann::json& j, std::string data_type, std::string sensor_id, int frequency, std::string sensor_id2) {
     // Construir a mensagem JSON para a main_j.
     j["data_type"] = data_type;
     j["data_interval"] = frequency;
     j["sensor_id"] = sensor_id;
+    j["sensor_id2"] = sensor_id2;
 }
 
 // Definição da função create_sensor_msg.
@@ -120,8 +143,9 @@ void publish_main_topic(nlohmann::json& j, int frequency) {
     mtx.lock();
     // Publicar a mensagem JSON no tópico apropriado.
     std::string topic = "/sensors/" + machineId + "/" + j["sensor_id"].get<std::string>() +
+                        "/" + j["sensor_id2"].get<std::string>() +
                         "/" + j["data_type"].get<std::string>() +
-                        "/" + std::to_string(frequency);  // Correção aqui
+                        "/" + std::to_string(frequency); 
     mqtt::message msg(topic, j.dump(), QOS, false);
 
     std::clog << "Main Message published - topic: " << topic << std::endl; 
