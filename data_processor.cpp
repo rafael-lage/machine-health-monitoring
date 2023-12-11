@@ -1,15 +1,10 @@
-//se der tempo adicionar a logica sinamica recebendo mensagens de varios sensores
-//o tamanho da main message aumentaria e teria que adicionar uma logica com vectors para tratar os dados recebidos fazendo um if com os tipos de sensores da main_message
-
-//implementar a funcao que verifica inatividade de um sensor
-
 #include <iostream>
 #include <cstdlib>
 #include <chrono>
 #include <thread>
 #include <unistd.h>
-#include "json.hpp" 
-#include "mqtt/client.h" 
+#include "json.hpp"
+#include "mqtt/client.h"
 #include <vector>
 
 #define QOS 1
@@ -26,7 +21,9 @@ struct Main_Message {
     std::string sensor_id = " ";
     std::string sensor_id2 = " ";
     std::string data_type = " ";
+    std::string data_type2 = " ";
     int frequency = 0;
+    int frequency2 = 0;
 };
 
 struct Sensor_Message {
@@ -39,7 +36,7 @@ struct Sensor_Message {
 struct Processed_Data {
     std::string machine_id;
     std::string sensor_id;
-    std:: string timestamp;
+    std::string timestamp;
     int current_value = 0;
     int old_value = 0;
     int number_of_values = 1;
@@ -49,14 +46,20 @@ struct Processed_Data {
     int min_value = 100;
 };
 
-void create_main_msg(Main_Message& msg, const std::string& machine_id, const std::string& sensor_id,  const std::string& sensor_id2, const std::string& data_type, const int frequency) {
+int InactivityDetected = 0;
+
+check_inactivity();
+
+
+void create_main_msg(Main_Message& msg, const std::string& machine_id, const std::string& sensor_id, const std::string& data_type, const int frequency, const std::string& sensor_id2, const std::string& data_type2, const int frequency2) {
     msg.machine_id = machine_id;
     msg.sensor_id = sensor_id;
     msg.sensor_id2 = sensor_id2;
     msg.data_type = data_type;
+    msg.data_type2 = data_type2;
     msg.frequency = frequency;
+    msg.frequency2 = frequency2;
 }
-
 
 void create_sensor_msg(Sensor_Message& msg, const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
     msg.machine_id = machine_id;
@@ -65,15 +68,19 @@ void create_sensor_msg(Sensor_Message& msg, const std::string& machine_id, const
     msg.value = value;
 }
 
-void post_metric_main(const std::string& machine_id, const std::string& sensor_id, const std::string& sensor_id2, const std::string& data_type, int frequency) {
-    Main_Message main_msg;
-    create_main_msg(main_msg, machine_id, sensor_id, sensor_id2, data_type, frequency);
-    std::cout << "Mensagem Main recebida: " << main_msg.machine_id << " " << main_msg.sensor_id << " " << main_msg.sensor_id2 << " " << main_msg.data_type << " " << main_msg.frequency << std::endl;
+void post_metric_main(const Main_Message& main_msg) {
+    std::cout << "Mensagem Main recebida: " << main_msg.machine_id << " "
+              << main_msg.sensor_id << " "
+              << main_msg.data_type << " "
+              << main_msg.frequency << " "
+              << main_msg.sensor_id2 << " "
+              << main_msg.data_type2 << " "
+              << main_msg.frequency2
+              << std::endl;
 }
 
+void create_processed_data(Processed_Data& data, std::string machine_id, std::string sensor_id, std::string timestamp, int value, int last_value_temperature, int n) {
 
-void create_processed_data(Processed_Data& data,std::string machine_id, std:: string sensor_id, std::string timestamp, int value, int last_value_temperature, int n){
-    
     //recebe os parametros
     data.machine_id = machine_id;
     data.sensor_id = sensor_id;
@@ -81,21 +88,21 @@ void create_processed_data(Processed_Data& data,std::string machine_id, std:: st
     data.current_value = value;
     data.old_value = last_value_temperature;
     data.number_of_values = n;
-    
-    //pega os menores e maiores valores que aparecerem
-    if(data.current_value > data.max_value){
-        data.max_value = data.current_value;
-    } 
 
-    if(data.current_value < data.min_value){
+    //pega os menores e maiores valores que aparecerem
+    if (data.current_value > data.max_value) {
+        data.max_value = data.current_value;
+    }
+
+    if (data.current_value < data.min_value) {
         data.min_value = data.current_value;
-    } 
+    }
 
     //pega o acumulado de valores
     data.sum_of_values = data.sum_of_values + data.current_value;
-    
+
     //pega a media dos valores
-    data.avg_value = data.sum_of_values/data.number_of_values;
+    data.avg_value = data.sum_of_values / data.number_of_values;
 }
 
 int last_value_temperature = 0;
@@ -108,13 +115,13 @@ Processed_Data data_temperature;
 Processed_Data data_memory;
 
 void post_metric_sensor(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
-    Sensor_Message msg;//inicializa o objeto com as informacoes recebidas do sensor
-    create_sensor_msg(msg, machine_id, sensor_id, timestamp_str, value);//cria o objeto com os parametros recebidos
+    Sensor_Message msg; //inicializa o objeto com as informacoes recebidas do sensor
+    create_sensor_msg(msg, machine_id, sensor_id, timestamp_str, value); //cria o objeto com os parametros recebidos
     std::cout << "Mensagem do Sensor recebida: " << msg.machine_id << " " << msg.sensor_id << " " << msg.timestamp << " " << msg.value << std::endl;
 
-    if(msg.sensor_id == "cpu_temperature"){
+    if (msg.sensor_id == "cpu_temperature") {
         //gera os dados que serao enviados para o graphit
-        create_processed_data(data_temperature,msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_temperature,temperature_n);
+        create_processed_data(data_temperature, msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_temperature, temperature_n);
 
         std::cout << "--------------------------------------------------------------------------------------------------------" << std::endl;
         std::cout << "Valor atual: " << data_temperature.current_value << std::endl;
@@ -126,12 +133,12 @@ void post_metric_sensor(const std::string& machine_id, const std::string& sensor
         std::cout << "--------------------------------------------------------------------------------------------------------" << std::endl;
 
         last_value_temperature = msg.value;
-        temperature_n++;   
+        temperature_n++;
     }
 
-        if(msg.sensor_id == "memory_usage"){
+    if (msg.sensor_id == "memory_usage") {
         //gera os dados que serao enviados para o graphit
-        create_processed_data(data_memory,msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_memory,memory_n);
+        create_processed_data(data_memory, msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_memory, memory_n);
 
         std::cout << "--------------------------------------------------------------------------------------------------------" << std::endl;
         std::cout << "Valor atual: " << data_memory.current_value << std::endl;
@@ -143,12 +150,9 @@ void post_metric_sensor(const std::string& machine_id, const std::string& sensor
         std::cout << "--------------------------------------------------------------------------------------------------------" << std::endl;
 
         last_value_memory = msg.value;
-        memory_n++;   
+        memory_n++;
     }
-
 }
-
-
 
 std::vector<std::string> split(const std::string& str, char delim) {
     std::vector<std::string> tokens;
@@ -174,22 +178,31 @@ public:
 
         //std::cout << "Topic[4] = "<< topic_parts[4] << std::endl;
         //std::cout << "Topic[4].size = "<< topic_parts[4].size() << std::endl;
-        //std::cout << "Topic.size = "<< topic_parts.size() << std::endl;
+        std::cout << "Topic.size = " << topic_parts.size() << std::endl;
 
+        //for (int i = 0; i<2 ;i++)
+        //    std:: cout << "Topic["<< i << "]" << topic_parts[i] << std::endl;
         //verifica se a mensagem vem do sensor pelo tamanho do paramatro 4. Se for 20 provavelmente recebeu o timestamp
         if (topic_parts[4].size() == 20) {
             std::string timestamp = topic_parts[4];
             int value = std::stoi(topic_parts[5]);
 
             post_metric_sensor(machine_id, sensor_id, timestamp, value);
-        
-        //verifica se o numero de parametros condiz com o que se espera receber pela quantidade de sensores
-        } else if (topic_parts.size() == 7) {
-            std::string sensor_id2 = topic_parts[4];
-            std::string data_type = topic_parts[5];
-            int frequency = std::stoi(topic_parts[6]);
 
-            post_metric_main(machine_id, sensor_id, sensor_id2, data_type, frequency);
+            //verifica se o numero de parametros condiz com o que se espera receber pela quantidade de sensores
+            // formato: /sensors/1cf7ac207520/cpu_temperature/int/1000/memory_usage/int/2000
+        } else if (topic_parts.size() == 9) {
+
+            std::string data_type = topic_parts[4];
+            int frequency = std::stoi(topic_parts[5]);
+            std::string sensor_id2 = topic_parts[6];
+            std::string data_type2 = topic_parts[7];
+            int frequency2 = std::stoi(topic_parts[8]);
+
+            Main_Message main_msg;
+            create_main_msg(main_msg, machine_id, sensor_id, data_type, frequency, sensor_id2, data_type2, frequency2);
+
+            post_metric_main(main_msg);
 
         } else {
             std::cerr << "Formato de tópico não reconhecido: " << topic << std::endl;
