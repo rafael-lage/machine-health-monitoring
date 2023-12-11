@@ -48,8 +48,6 @@ struct Processed_Data {
 
 int InactivityDetected = 0;
 
-check_inactivity();
-
 
 void create_main_msg(Main_Message& msg, const std::string& machine_id, const std::string& sensor_id, const std::string& data_type, const int frequency, const std::string& sensor_id2, const std::string& data_type2, const int frequency2) {
     msg.machine_id = machine_id;
