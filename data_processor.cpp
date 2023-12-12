@@ -140,13 +140,14 @@ std::time_t convertTimestampToEpoch(const std::string& timestamp) {
 
 //global variables to detect inactivity
 
-bool InactivityDetected = false;
+bool InactivityDetectedSensor = false;
+bool InactivityDetectedSensor2 = false;
 int countSensorMsg = 0;
 int countSensor2Msg = 0;
 
 //prototypes
 void startInactivitySystem(Main_Message msg);
-void countInactivity (int max_time, int max_time_2);
+void countInactivity (int max_time, int max_time_2, Main_Message msg);
 
 void create_main_msg(Main_Message& msg, const std::string& machine_id, const std::string& sensor_id, const std::string& data_type, const int frequency, const std::string& sensor_id2, const std::string& data_type2, const int frequency2) {
     msg.machine_id = machine_id;
@@ -217,9 +218,16 @@ void post_metric_sensor(const std::string& machine_id, const std::string& sensor
     std::cout << "Mensagem do Sensor recebida: " << msg.machine_id << " " << msg.sensor_id << " " << msg.timestamp << " " << msg.value << std::endl;
 
     if (msg.sensor_id == "cpu_temperature") {
-        //reseta contador de inatividade
-        countSensorMsg = 0;
-        //gera os dados que serao enviados para o graphit
+        
+        //reseta contador de inatividade e envia ao grafite a atividade
+        InactivityDetectedSensor = false;
+        countSensorMsg = 0;   
+        time_t now = time(nullptr);
+        std::string timestamp = std::to_string(now);
+        std::string buffer = msg.machine_id  + "_" + msg.sensor_id + ".InactivityDetectedSensor";
+        sendMetricToGraphite(buffer, InactivityDetectedSensor, timestamp);
+        
+        //constrou dados processados que serao enviados para o graphit
         create_processed_data(data_temperature, msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_temperature, temperature_n);
 
         std::cout << "--------------------------------------------------------------------------------------------------------" << std::endl;
@@ -234,12 +242,19 @@ void post_metric_sensor(const std::string& machine_id, const std::string& sensor
         last_value_temperature = msg.value;
         temperature_n++;
 
-         send_processed_data(data_temperature);
+        send_processed_data(data_temperature);
     }
 
     if (msg.sensor_id == "memory_usage") {
-        //reseta contador de inatividade
-        countSensor2Msg = 0;
+        //reseta contador de inatividade e envia ao grafite a atividade
+        InactivityDetectedSensor2 = false;
+        countSensor2Msg = 0;   
+        time_t now = time(nullptr);
+        std::string timestamp = std::to_string(now);
+        std::string buffer = msg.machine_id  + "_" + msg.sensor_id + ".InactivityDetectedSensor2";
+        sendMetricToGraphite(buffer, InactivityDetectedSensor2, timestamp);
+
+
         //gera os dados que serao enviados para o graphit
         create_processed_data(data_memory, msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_memory, memory_n);
 
@@ -276,12 +291,12 @@ void startInactivitySystem(Main_Message msg){
     int max_time2 = (msg.frequency2 * 10)/1000;
 
     //criando uma thread que vai contando o tempo desde a ultima mensagem
-    std::thread ControlThread (countInactivity, max_time, max_time2);
+    std::thread ControlThread (countInactivity, max_time, max_time2, msg);
 
     ControlThread.detach();
 }
 
-void countInactivity (int max_time, int max_time2){
+void countInactivity (int max_time, int max_time2, Main_Message data){
     
     while(1){
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -289,15 +304,38 @@ void countInactivity (int max_time, int max_time2){
         countSensorMsg += 1;
         countSensor2Msg += 1;
 
+        std::string identifier = data.machine_id;
+        std::string buffer;
+        time_t now = time(nullptr);
+        std::string timestamp = std::to_string(now);
+
+
         //std::cout << "max_1 = " << max_time <<std::endl << "max_2 = " << max_time2 <<std::endl;
         //std::cout << "Count1 = " << countSensorMsg <<std::endl << "Count2 = " << countSensor2Msg <<std::endl;
 
-        if(countSensorMsg == max_time || countSensor2Msg == max_time2){
-            InactivityDetected = true;
-            std::cout << "Inatividade Detectada" << std::endl;
+        if(countSensorMsg == max_time){
+            InactivityDetectedSensor = true;
+            std::cout << "Inatividade Detectada no sensor 1" << std::endl;
+            
+            identifier = identifier + "_" + data.sensor_id;
+            buffer = identifier;
+
+            buffer = identifier + ".InactivityDetectedSensor";
+            sendMetricToGraphite(buffer, InactivityDetectedSensor, timestamp);
         }
 
-        //mtx.unlock();
+        if(countSensor2Msg == max_time2){
+            InactivityDetectedSensor2 = true;
+            std::cout << "Inatividade Detectada no sensor 2" << std::endl;
+            
+            identifier = identifier + "_" + data.sensor_id2;
+            buffer = identifier;
+
+            buffer = identifier + ".InactivityDetectedSensor2";
+            sendMetricToGraphite(buffer, InactivityDetectedSensor2, timestamp);
+
+        }
+
     }
 
 }
