@@ -1,3 +1,6 @@
+//FAZER UM CÓDIGO TESTE QUE ENVIA UMA METRICA SIMPLES UTILIZANDO TCP-IP
+//EXPANDIR A LOGICA PARA ENVIAR TODAS AS METRICAS QUE VAO SER NECESSARIAS
+
 #include <iostream>
 #include <cstdlib>
 #include <chrono>
@@ -6,10 +9,15 @@
 #include "json.hpp"
 #include "mqtt/client.h"
 #include <vector>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
-#define GRAPHITE_HOST "graphite"
+#define GRAPHITE_HOST "127.0.0.1"
+//#define GRAPHITE_HOST "graphite"
 #define GRAPHITE_PORT 2003
 
 const std::string SERVER_ADDRESS("tcp://localhost:1883");
@@ -46,8 +54,99 @@ struct Processed_Data {
     int min_value = 100;
 };
 
-int InactivityDetected = 0;
+int sendMetricToGraphite(const std::string& metric, int value, std::string& timestamp) {
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        std::cerr << "Error creating socket" << std::endl;
+        return 1;
+    }
 
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(GRAPHITE_PORT);
+    
+    // Convert host name to IP address
+    if (inet_pton(AF_INET, GRAPHITE_HOST, &server_addr.sin_addr) <= 0) {
+        std::cerr << "Error converting host to IP address" << std::endl;
+        close(sockfd);
+        return 1;
+    }
+
+    if (connect(sockfd, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) == -1) {
+        std::cerr << "Error connecting to Graphite: " << strerror(errno) << std::endl;
+        close(sockfd);
+        return 1;
+    }
+
+    // Construct the message
+    std::ostringstream oss;
+    oss << metric << " " << value << " " << timestamp << "\n";
+    std::string message = oss.str();
+
+    std::cout << "Sending message to Graphite: " << message;
+
+    ssize_t sent = send(sockfd, message.c_str(), message.size(), 0);
+    if (sent < 0) {
+        std::cerr << "Error sending metric to Graphite: " << strerror(errno) << std::endl;
+    } else {
+        std::cout << "Metric sent successfully to Graphite" << std::endl;
+    }
+
+    close(sockfd);
+    return 0;
+}
+
+std::time_t convertTimestampToEpoch(const std::string& timestamp) {
+    std::tm tm = {};
+    std::istringstream ss(timestamp);
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    if (ss.fail()) {
+        // Handle parsing error
+        return -1; // Indicate error
+    }
+    auto time_point = std::chrono::system_clock::from_time_t(std::mktime(&tm));
+    return std::chrono::duration_cast<std::chrono::seconds>(time_point.time_since_epoch()).count();
+}
+
+ void send_processed_data(Processed_Data& data){
+
+            std::string identifier = data.machine_id + "_" + data.sensor_id;
+            std::string buffer = identifier;
+            
+
+            std::time_t epoch_time = convertTimestampToEpoch(data.timestamp);
+            if (epoch_time == -1) {
+                // Handle error in timestamp conversion
+                std::cerr << "Error converting timestamp to epoch time." << std::endl;
+                return;
+            }
+            std::string timestamp = std::to_string(epoch_time);
+
+
+
+            buffer = identifier + ".value";
+            sendMetricToGraphite(buffer, data.current_value, timestamp);
+            buffer = identifier + ".avg";
+            sendMetricToGraphite(buffer, data.avg_value, timestamp);
+            buffer = identifier + ".max";
+            sendMetricToGraphite(buffer, data.max_value, timestamp);
+            buffer = identifier + ".min";
+            sendMetricToGraphite(buffer, data.min_value, timestamp);
+            buffer = identifier + ".number_of_values";
+            sendMetricToGraphite(buffer, data.number_of_values, timestamp);
+
+ }
+
+
+//global variables to detect inactivity
+
+bool InactivityDetected = false;
+int countSensorMsg = 0;
+int countSensor2Msg = 0;
+
+//prototypes
+void startInactivitySystem(Main_Message msg);
+void countInactivity (int max_time, int max_time_2);
 
 void create_main_msg(Main_Message& msg, const std::string& machine_id, const std::string& sensor_id, const std::string& data_type, const int frequency, const std::string& sensor_id2, const std::string& data_type2, const int frequency2) {
     msg.machine_id = machine_id;
@@ -118,6 +217,8 @@ void post_metric_sensor(const std::string& machine_id, const std::string& sensor
     std::cout << "Mensagem do Sensor recebida: " << msg.machine_id << " " << msg.sensor_id << " " << msg.timestamp << " " << msg.value << std::endl;
 
     if (msg.sensor_id == "cpu_temperature") {
+        //reseta contador de inatividade
+        countSensorMsg = 0;
         //gera os dados que serao enviados para o graphit
         create_processed_data(data_temperature, msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_temperature, temperature_n);
 
@@ -132,9 +233,13 @@ void post_metric_sensor(const std::string& machine_id, const std::string& sensor
 
         last_value_temperature = msg.value;
         temperature_n++;
+
+         send_processed_data(data_temperature);
     }
 
     if (msg.sensor_id == "memory_usage") {
+        //reseta contador de inatividade
+        countSensor2Msg = 0;
         //gera os dados que serao enviados para o graphit
         create_processed_data(data_memory, msg.machine_id, msg.sensor_id, msg.timestamp, msg.value, last_value_memory, memory_n);
 
@@ -149,6 +254,8 @@ void post_metric_sensor(const std::string& machine_id, const std::string& sensor
 
         last_value_memory = msg.value;
         memory_n++;
+        
+        send_processed_data(data_memory);
     }
 }
 
@@ -162,11 +269,47 @@ std::vector<std::string> split(const std::string& str, char delim) {
     return tokens;
 }
 
+void startInactivitySystem(Main_Message msg){
+
+    //criando limite para ser considerado timeout em segundos
+    int max_time = (msg.frequency * 10)/1000;
+    int max_time2 = (msg.frequency2 * 10)/1000;
+
+    //criando uma thread que vai contando o tempo desde a ultima mensagem
+    std::thread ControlThread (countInactivity, max_time, max_time2);
+
+    ControlThread.detach();
+}
+
+void countInactivity (int max_time, int max_time2){
+    
+    while(1){
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+       // mtx.lock();
+        countSensorMsg += 1;
+        countSensor2Msg += 1;
+
+        //std::cout << "max_1 = " << max_time <<std::endl << "max_2 = " << max_time2 <<std::endl;
+        //std::cout << "Count1 = " << countSensorMsg <<std::endl << "Count2 = " << countSensor2Msg <<std::endl;
+
+        if(countSensorMsg == max_time || countSensor2Msg == max_time2){
+            InactivityDetected = true;
+            std::cout << "Inatividade Detectada" << std::endl;
+        }
+
+        //mtx.unlock();
+    }
+
+}
+
+
+bool isFirstExecution = true;
 // Create an MQTT callback.
 class callback : public virtual mqtt::callback {
 public:
 
     void message_arrived(mqtt::const_message_ptr msg) override {
+        
         auto j = nlohmann::json::parse(msg->get_payload());
 
         std::string topic = msg->get_topic();
@@ -176,10 +319,8 @@ public:
 
         //std::cout << "Topic[4] = "<< topic_parts[4] << std::endl;
         //std::cout << "Topic[4].size = "<< topic_parts[4].size() << std::endl;
-        std::cout << "Topic.size = " << topic_parts.size() << std::endl;
+        //std::cout << "Topic.size = " << topic_parts.size() << std::endl;
 
-        //for (int i = 0; i<2 ;i++)
-        //    std:: cout << "Topic["<< i << "]" << topic_parts[i] << std::endl;
         //verifica se a mensagem vem do sensor pelo tamanho do paramatro 4. Se for 20 provavelmente recebeu o timestamp
         if (topic_parts[4].size() == 20) {
             std::string timestamp = topic_parts[4];
@@ -200,6 +341,10 @@ public:
             Main_Message main_msg;
             create_main_msg(main_msg, machine_id, sensor_id, data_type, frequency, sensor_id2, data_type2, frequency2);
 
+            if(isFirstExecution){
+                startInactivitySystem(main_msg);
+                isFirstExecution = false;
+            }
             post_metric_main(main_msg);
 
         } else {
